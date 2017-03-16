@@ -163,7 +163,7 @@ def find_container(ip):
         # if we have a container, check if it's part of a Kubernetes pod and return an array of those containers
         if leadcontainer['Config']['Labels']['io.kubernetes.pod.uid']:
             # Kubernetes pod, find it's siblings
-            k = [leadcontainter]
+            k = [leadcontainer]
             for _id in _ids:
                 # skip ourselves
                 if _id == leadcontainer['Id']:
