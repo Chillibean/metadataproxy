@@ -87,21 +87,21 @@ def find_container(ip):
     pattern = re.compile(app.config['HOSTNAME_MATCH_REGEX'])
     client = docker_client()
     # Try looking at the container mapping cache first
-    if ip in CONTAINER_MAPPING:
-        log.info('Container id for IP {0} in cache'.format(ip))
-        try:
-            with PrintingBlockTimer('Container inspect'):
-                container = client.inspect_container(CONTAINER_MAPPING[ip])
-            # Only return a cached container if it is running.
-            if container['State']['Running']:
-                return container
-            else:
-                log.error('Container id {0} is no longger running'.format(ip))
-                del CONTAINER_MAPPING[ip]
-        except docker.errors.NotFound:
-            msg = 'Container id {0} no longer mapped to {1}'
-            log.error(msg.format(CONTAINER_MAPPING[ip], ip))
-            del CONTAINER_MAPPING[ip]
+    # if ip in CONTAINER_MAPPING:
+    #     log.info('Container id for IP {0} in cache'.format(ip))
+    #     try:
+    #         with PrintingBlockTimer('Container inspect'):
+    #             container = client.inspect_container(CONTAINER_MAPPING[ip])
+    #         # Only return a cached container if it is running.
+    #         if container['State']['Running']:
+    #             return container
+    #         else:
+    #             log.error('Container id {0} is no longger running'.format(ip))
+    #             del CONTAINER_MAPPING[ip]
+    #     except docker.errors.NotFound:
+    #         msg = 'Container id {0} no longer mapped to {1}'
+    #         log.error(msg.format(CONTAINER_MAPPING[ip], ip))
+    #         del CONTAINER_MAPPING[ip]
 
     _fqdn = None
     with PrintingBlockTimer('Reverse DNS'):
@@ -115,6 +115,7 @@ def find_container(ip):
     with PrintingBlockTimer('Container fetch'):
         _ids = [c['Id'] for c in client.containers()]
 
+    containercache={}
     for _id in _ids:
         try:
             with PrintingBlockTimer('Container inspect'):
@@ -122,13 +123,17 @@ def find_container(ip):
         except docker.errors.NotFound:
             log.error('Container id {0} not found'.format(_id))
             continue
+        # create a cache of containers for reducing further lookups
+        if c['Config']['Labels']['io.kubernetes.pod.uid']:
+            containercache[_id]=c
         # Try matching container to caller by IP address
         _ip = c['NetworkSettings']['IPAddress']
         if ip == _ip:
             msg = 'Container id {0} mapped to {1} by IP match'
             log.debug(msg.format(_id, ip))
             CONTAINER_MAPPING[ip] = _id
-            return c
+            leadcontainer = c
+            break
         # Try matching container to caller by sub network IP address
         _networks = c['NetworkSettings']['Networks']
         if _networks:
@@ -137,7 +142,8 @@ def find_container(ip):
                     msg = 'Container id {0} mapped to {1} by sub-network IP match'
                     log.debug(msg.format(_id, ip))
                     CONTAINER_MAPPING[ip] = _id
-                    return c
+                    leadcontainer = c
+                    break
         # Try matching container to caller by hostname match
         if app.config['ROLE_REVERSE_LOOKUP']:
             hostname = c['Config']['Hostname']
@@ -151,8 +157,35 @@ def find_container(ip):
                     msg = 'Container id {0} mapped to {1} by FQDN match'
                     log.debug(msg.format(_id, ip))
                     CONTAINER_MAPPING[ip] = _id
-                    return c
-
+                    leadcontainer = c
+                    break
+    if leadcontainer:
+        # if we have a container, check if it's part of a Kubernetes pod and return an array of those containers
+        if leadcontainer['Config']['Labesls']['io.kubernetes.pod.uid']:
+            # Kubernetes pod, find it's siblings
+            k = [leadcontainter]
+            for _id in _ids:
+                # skip ourselves
+                if _id == leadcontainer['Id']:
+                    continue
+                # check cache first, to save docker api calls
+                if containercache[_id]['Config']['Labesls']['io.kubernetes.pod.uid']:
+                    if containercache[_id]['Config']['Labesls']['io.kubernetes.pod.uid'] == leadcontainer['Config']['Labesls']['io.kubernetes.pod.uid']:
+                        k.append(containercache[_id])
+                else:
+                    try:
+                        with PrintingBlockTimer('Container inspect'):
+                            c = client.inspect_container(_id)
+                            if c['Config']['Labesls']['io.kubernetes.pod.uid'] == leadcontainer['Config']['Labesls']['io.kubernetes.pod.uid']:
+                                k.append(c)
+                    except docker.errors.NotFound:
+                        log.error('Container id {0} not found'.format(_id))
+                        continue
+            return k
+        else:
+            # not kubernetes, just return an single element array.
+            return [leadcontainer]
+                
     log.error('No container found for ip {0}'.format(ip))
     return None
 
@@ -171,19 +204,20 @@ def check_role_name_from_ip(ip, requested_role):
 def get_role_name_from_ip(ip, stripped=True):
     if app.config['ROLE_MAPPING_FILE']:
         return ROLE_MAPPINGS.get(ip, app.config['DEFAULT_ROLE'])
-    container = find_container(ip)
-    if container:
-        env = container['Config']['Env']
-        for e in env:
-            key, val = e.split('=', 1)
-            if key == 'IAM_ROLE':
-                if val.startswith('arn:aws'):
-                    m = RE_IAM_ARN.match(val)
-                    val = '{0}@{1}'.format(m.group(2), m.group(1))
-                if stripped:
-                    return val.split('@')[0]
-                else:
-                    return val
+    containers = find_container(ip)
+    if containers:
+        for container in containers:
+            env = container['Config']['Env']
+            for e in env:
+                key, val = e.split('=', 1)
+                if key == 'IAM_ROLE':
+                    if val.startswith('arn:aws'):
+                        m = RE_IAM_ARN.match(val)
+                        val = '{0}@{1}'.format(m.group(2), m.group(1))
+                    if stripped:
+                        return val.split('@')[0]
+                    else:
+                        return val
         msg = "Couldn't find IAM_ROLE variable. Returning DEFAULT_ROLE: {0}"
         log.debug(msg.format(app.config['DEFAULT_ROLE']))
         if stripped:
