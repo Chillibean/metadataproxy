@@ -169,7 +169,7 @@ def find_container(ip):
                 if _id == leadcontainer['Id']:
                     continue
                 # check cache first, to save docker api calls
-                if containercache[_id]['Config']['Labels']['io.kubernetes.pod.uid']:
+                if containercache[_id] and containercache[_id]['Config']['Labels']['io.kubernetes.pod.uid']:
                     if containercache[_id]['Config']['Labels']['io.kubernetes.pod.uid'] == leadcontainer['Config']['Labels']['io.kubernetes.pod.uid']:
                         k.append(containercache[_id])
                 else:
