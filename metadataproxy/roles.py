@@ -161,7 +161,7 @@ def find_container(ip):
                     break
     if leadcontainer:
         # if we have a container, check if it's part of a Kubernetes pod and return an array of those containers
-        if leadcontainer['Config']['Labesls']['io.kubernetes.pod.uid']:
+        if leadcontainer['Config']['Labels']['io.kubernetes.pod.uid']:
             # Kubernetes pod, find it's siblings
             k = [leadcontainter]
             for _id in _ids:
@@ -169,14 +169,14 @@ def find_container(ip):
                 if _id == leadcontainer['Id']:
                     continue
                 # check cache first, to save docker api calls
-                if containercache[_id]['Config']['Labesls']['io.kubernetes.pod.uid']:
-                    if containercache[_id]['Config']['Labesls']['io.kubernetes.pod.uid'] == leadcontainer['Config']['Labesls']['io.kubernetes.pod.uid']:
+                if containercache[_id]['Config']['Labels']['io.kubernetes.pod.uid']:
+                    if containercache[_id]['Config']['Labels']['io.kubernetes.pod.uid'] == leadcontainer['Config']['Labels']['io.kubernetes.pod.uid']:
                         k.append(containercache[_id])
                 else:
                     try:
                         with PrintingBlockTimer('Container inspect'):
                             c = client.inspect_container(_id)
-                            if c['Config']['Labesls']['io.kubernetes.pod.uid'] == leadcontainer['Config']['Labesls']['io.kubernetes.pod.uid']:
+                            if c['Config']['Labels']['io.kubernetes.pod.uid'] == leadcontainer['Config']['Labels']['io.kubernetes.pod.uid']:
                                 k.append(c)
                     except docker.errors.NotFound:
                         log.error('Container id {0} not found'.format(_id))
