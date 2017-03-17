@@ -129,7 +129,7 @@ def find_container(ip):
         # Try matching container to caller by IP address
         _ip = c['NetworkSettings']['IPAddress']
         if ip == _ip:
-            msg = 'Container id {0} mapped to {1} by IP match'
+            msg = 'Lead Container id {0} mapped to {1} by IP match'
             log.debug(msg.format(_id, ip))
             CONTAINER_MAPPING[ip] = _id
             leadcontainer = c
@@ -161,7 +161,7 @@ def find_container(ip):
                     break
     if leadcontainer:
         # if we have a container, check if it's part of a Kubernetes pod and return an array of those containers
-        if leadcontainer['Config']['Labels']['io.kubernetes.pod.uid']:
+        if 'io.kubernetes.pod.uid' in leadcontainer['Config']['Labels']:
             # Kubernetes pod, find it's siblings
             k = [leadcontainer]
             for _id in _ids:
@@ -169,9 +169,8 @@ def find_container(ip):
                 if _id == leadcontainer['Id']:
                     continue
                 # check cache first, to save docker api calls
-                if containercache[_id] and containercache[_id]['Config']['Labels']['io.kubernetes.pod.uid']:
-                    if containercache[_id]['Config']['Labels']['io.kubernetes.pod.uid'] == leadcontainer['Config']['Labels']['io.kubernetes.pod.uid']:
-                        k.append(containercache[_id])
+                if _id in containercache:
+                    c=containercache[_id]
                 else:
                     try:
                         with PrintingBlockTimer('Container inspect'):
@@ -181,6 +180,11 @@ def find_container(ip):
                     except docker.errors.NotFound:
                         log.error('Container id {0} not found'.format(_id))
                         continue
+                if 'io.kubernetes.pod.uid' in c['Config']['Labels'] and c['Config']['Labels']['io.kubernetes.pod.uid'] == leadcontainer['Config']['Labels']['io.kubernetes.pod.uid']:
+                    msg = 'Lead Container id {0} mapped to {1} by k8s pod match to container {2}'
+                    log.debug(msg.format(_id, ip, leadcontainer['Id']))
+                    k.append(containercache[_id])
+
             return k
         else:
             # not kubernetes, just return an single element array.
