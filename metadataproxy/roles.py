@@ -88,6 +88,7 @@ def find_container(ip):
     pattern = re.compile(app.config['HOSTNAME_MATCH_REGEX'])
     client = docker_client()
     # Try looking at the container mapping cache first
+    log.info('size of container cache: {0}'.format(len(CONTAINER_MAPPING)))
     if ip in CONTAINER_MAPPING:
         log.info('Container ids for IP {0} in cache'.format(ip))
         
