@@ -18,6 +18,7 @@ from metadataproxy import log
 
 ROLES = {}
 CONTAINER_MAPPING = {}
+K8S_MAPPING = {}
 _docker_client = None
 _iam_client = None
 _sts_client = None
@@ -87,21 +88,22 @@ def find_container(ip):
     pattern = re.compile(app.config['HOSTNAME_MATCH_REGEX'])
     client = docker_client()
     # Try looking at the container mapping cache first
-    # if ip in CONTAINER_MAPPING:
-    #     log.info('Container id for IP {0} in cache'.format(ip))
-    #     try:
-    #         with PrintingBlockTimer('Container inspect'):
-    #             container = client.inspect_container(CONTAINER_MAPPING[ip])
-    #         # Only return a cached container if it is running.
-    #         if container['State']['Running']:
-    #             return container
-    #         else:
-    #             log.error('Container id {0} is no longger running'.format(ip))
-    #             del CONTAINER_MAPPING[ip]
-    #     except docker.errors.NotFound:
-    #         msg = 'Container id {0} no longer mapped to {1}'
-    #         log.error(msg.format(CONTAINER_MAPPING[ip], ip))
-    #         del CONTAINER_MAPPING[ip]
+    if ip in CONTAINER_MAPPING:
+        log.info('Container ids for IP {0} in cache'.format(ip))
+        
+        try:
+            with PrintingBlockTimer('Container inspect'):
+                container = client.inspect_container(CONTAINER_MAPPING[ip])
+            # Only return a cached container if it is running.
+            if container['State']['Running']:
+                leadcontainer = container
+            else:
+                log.error('Container id {0} is no longer running'.format(ip))
+                del CONTAINER_MAPPING[ip]
+        except docker.errors.NotFound:
+            msg = 'Container id {0} no longer mapped to {1}'
+            log.error(msg.format(CONTAINER_MAPPING[ip], ip))
+            del CONTAINER_MAPPING[ip]
 
     _fqdn = None
     with PrintingBlockTimer('Reverse DNS'):
@@ -115,7 +117,6 @@ def find_container(ip):
     with PrintingBlockTimer('Container fetch'):
         _ids = [c['Id'] for c in client.containers()]
 
-    containercache={}
     for _id in _ids:
         try:
             with PrintingBlockTimer('Container inspect'):
@@ -124,8 +125,8 @@ def find_container(ip):
             log.error('Container id {0} not found'.format(_id))
             continue
         # create a cache of containers for reducing further lookups
-        if c['Config']['Labels']['io.kubernetes.pod.uid']:
-            containercache[_id]=c
+        if 'io.kubernetes.pod.uid' in c['Config']['Labels']:
+            K8S_MAPPING[_id]=c
         # Try matching container to caller by IP address
         _ip = c['NetworkSettings']['IPAddress']
         if ip == _ip:
@@ -169,21 +170,41 @@ def find_container(ip):
                 if _id == leadcontainer['Id']:
                     continue
                 # check cache first, to save docker api calls
-                if _id in containercache:
-                    c=containercache[_id]
+                if _id in K8S_MAPPING:
+                    if K8S_MAPPING[_id]['Config']['Labels']['io.kubernetes.pod.uid'] == leadcontainer['Config']['Labels']['io.kubernetes.pod.uid']:
+                        try:
+                            with PrintingBlockTimer('Container inspect'):
+                            container = client.inspect_container(K8S_MAPPING[_id]['Id'])
+                            # Only return a cached container if it is running.
+                            if container['State']['Running']:
+                                msg = 'Lead Container id {0} mapped to {1} by k8s cached pod match to container {2}'
+                                log.debug(msg.format(_id, ip, leadcontainer['Id']))
+                                k.append(container)
+                                continue
+                            else:
+                                log.error('Container id {0} is no longer running'.format(_id))
+                                del K8S_MAPPING[_id]
+                        except docker.errors.NotFound:
+                            msg = 'Container id {0} no longer found'
+                            log.error(msg.format(_id))
+                            del K8S_MAPPING[_id]
                 else:
                     try:
                         with PrintingBlockTimer('Container inspect'):
                             c = client.inspect_container(_id)
-                            if c['Config']['Labels']['io.kubernetes.pod.uid'] == leadcontainer['Config']['Labels']['io.kubernetes.pod.uid']:
-                                k.append(c)
+                            if 'io.kubernetes.pod.uid' in c['Config']['Labels']:
+                                K8S_MAPPING[_id]=c
+                                if c['Config']['Labels']['io.kubernetes.pod.uid'] == leadcontainer['Config']['Labels']['io.kubernetes.pod.uid']:
+                                    msg = 'Lead Container id {0} mapped to {1} by k8s pod match to container {2}'
+                                    log.debug(msg.format(_id, ip, leadcontainer['Id']))
+                                    k.append(c)
                     except docker.errors.NotFound:
                         log.error('Container id {0} not found'.format(_id))
                         continue
-                if 'io.kubernetes.pod.uid' in c['Config']['Labels'] and c['Config']['Labels']['io.kubernetes.pod.uid'] == leadcontainer['Config']['Labels']['io.kubernetes.pod.uid']:
-                    msg = 'Lead Container id {0} mapped to {1} by k8s pod match to container {2}'
-                    log.debug(msg.format(_id, ip, leadcontainer['Id']))
-                    k.append(containercache[_id])
+                    if 'io.kubernetes.pod.uid' in c['Config']['Labels'] and c['Config']['Labels']['io.kubernetes.pod.uid'] == leadcontainer['Config']['Labels']['io.kubernetes.pod.uid']:
+                        msg = 'Lead Container id {0} mapped to {1} by k8s pod match to container {2}'
+                        log.debug(msg.format(_id, ip, leadcontainer['Id']))
+                        k.append(c)
 
             return k
         else:
