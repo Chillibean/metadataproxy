@@ -174,16 +174,16 @@ def find_container(ip):
                     if K8S_MAPPING[_id]['Config']['Labels']['io.kubernetes.pod.uid'] == leadcontainer['Config']['Labels']['io.kubernetes.pod.uid']:
                         try:
                             with PrintingBlockTimer('Container inspect'):
-                            container = client.inspect_container(K8S_MAPPING[_id]['Id'])
-                            # Only return a cached container if it is running.
-                            if container['State']['Running']:
-                                msg = 'Lead Container id {0} mapped to {1} by k8s cached pod match to container {2}'
-                                log.debug(msg.format(_id, ip, leadcontainer['Id']))
-                                k.append(container)
-                                continue
-                            else:
-                                log.error('Container id {0} is no longer running'.format(_id))
-                                del K8S_MAPPING[_id]
+                                container = client.inspect_container(K8S_MAPPING[_id]['Id'])
+                                # Only return a cached container if it is running.
+                                if container['State']['Running']:
+                                    msg = 'Lead Container id {0} mapped to {1} by k8s cached pod match to container {2}'
+                                    log.debug(msg.format(_id, ip, leadcontainer['Id']))
+                                    k.append(container)
+                                    continue
+                                else:
+                                    log.error('Container id {0} is no longer running'.format(_id))
+                                    del K8S_MAPPING[_id]
                         except docker.errors.NotFound:
                             msg = 'Container id {0} no longer found'
                             log.error(msg.format(_id))
