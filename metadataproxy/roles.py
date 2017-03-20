@@ -109,6 +109,7 @@ def get_container(id,nocache=False):
 @log_exec_time
 def find_container(ip):
     pattern = re.compile(app.config['HOSTNAME_MATCH_REGEX'])
+    leadcontainer = None
     # Try looking at the container mapping cache first
     log.info('size of container cache: {0}'.format(len(CONTAINER_MAPPING)))
     if ip in CONTAINER_MAPPING:
