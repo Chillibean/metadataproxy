@@ -96,7 +96,7 @@ def get_container(id,nocache=False):
             if container['State']['Running']:
                 CONTAINER_CACHE[id]=container
                 # create a cache of containers for reducing further lookups
-                if 'io.kubernetes.pod.uid' in c['Config']['Labels']:
+                if 'io.kubernetes.pod.uid' in container['Config']['Labels']:
                     K8S_MAPPING[id]=container
                 return container
             else:
