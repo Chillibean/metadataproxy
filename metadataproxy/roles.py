@@ -117,55 +117,58 @@ def find_container(ip):
             container = get_container(client.inspect_container(CONTAINER_MAPPING[ip],True))
             if container:
                 leadcontainer = container
-                break
+            else:
+                del CONTAINER_MAPPING[ip]
+    
     _fqdn = None
-    with PrintingBlockTimer('Reverse DNS'):
-        if app.config['ROLE_REVERSE_LOOKUP']:
-            try:
-                _fqdn = socket.gethostbyaddr(ip)[0]
-            except socket.error as e:
-                log.error('gethostbyaddr failed: {0}'.format(e.args))
-                pass
-
-    with PrintingBlockTimer('Container fetch'):
-        _ids = [c['Id'] for c in client.containers()]
-
-    for _id in _ids:
-        c = get_container(_id)
-        if c:
-            # Try matching container to caller by IP address
-            _ip = c['NetworkSettings']['IPAddress']
-            if ip == _ip:
-                msg = 'Lead Container id {0} mapped to {1} by IP match'
-                log.debug(msg.format(_id, ip))
-                CONTAINER_MAPPING[ip] = _id
-                leadcontainer = c
-                break
-            # Try matching container to caller by sub network IP address
-            _networks = c['NetworkSettings']['Networks']
-            if _networks:
-                for _network in _networks:
-                    if _networks[_network]['IPAddress'] == ip:
-                        msg = 'Container id {0} mapped to {1} by sub-network IP match'
-                        log.debug(msg.format(_id, ip))
-                        CONTAINER_MAPPING[ip] = _id
-                        leadcontainer = c
-                        break
-            # Try matching container to caller by hostname match
+    if not leadcontainer:
+        with PrintingBlockTimer('Reverse DNS'):
             if app.config['ROLE_REVERSE_LOOKUP']:
-                hostname = c['Config']['Hostname']
-                domain = c['Config']['Domainname']
-                fqdn = '{0}.{1}'.format(hostname, domain)
-                # Default pattern matches _fqdn == fqdn
-                _groups = re.match(pattern, _fqdn).groups()
-                groups = re.match(pattern, fqdn).groups()
-                if _groups and groups:
-                    if groups[0] == _groups[0]:
-                        msg = 'Container id {0} mapped to {1} by FQDN match'
-                        log.debug(msg.format(_id, ip))
-                        CONTAINER_MAPPING[ip] = _id
-                        leadcontainer = c
-                        break
+                try:
+                    _fqdn = socket.gethostbyaddr(ip)[0]
+                except socket.error as e:
+                    log.error('gethostbyaddr failed: {0}'.format(e.args))
+                    pass
+
+        with PrintingBlockTimer('Container fetch'):
+            _ids = [c['Id'] for c in client.containers()]
+
+        for _id in _ids:
+            c = get_container(_id)
+            if c:
+                # Try matching container to caller by IP address
+                _ip = c['NetworkSettings']['IPAddress']
+                if ip == _ip:
+                    msg = 'Lead Container id {0} mapped to {1} by IP match'
+                    log.debug(msg.format(_id, ip))
+                    CONTAINER_MAPPING[ip] = _id
+                    leadcontainer = c
+                    break
+                # Try matching container to caller by sub network IP address
+                _networks = c['NetworkSettings']['Networks']
+                if _networks:
+                    for _network in _networks:
+                        if _networks[_network]['IPAddress'] == ip:
+                            msg = 'Container id {0} mapped to {1} by sub-network IP match'
+                            log.debug(msg.format(_id, ip))
+                            CONTAINER_MAPPING[ip] = _id
+                            leadcontainer = c
+                            break
+                # Try matching container to caller by hostname match
+                if app.config['ROLE_REVERSE_LOOKUP']:
+                    hostname = c['Config']['Hostname']
+                    domain = c['Config']['Domainname']
+                    fqdn = '{0}.{1}'.format(hostname, domain)
+                    # Default pattern matches _fqdn == fqdn
+                    _groups = re.match(pattern, _fqdn).groups()
+                    groups = re.match(pattern, fqdn).groups()
+                    if _groups and groups:
+                        if groups[0] == _groups[0]:
+                            msg = 'Container id {0} mapped to {1} by FQDN match'
+                            log.debug(msg.format(_id, ip))
+                            CONTAINER_MAPPING[ip] = _id
+                            leadcontainer = c
+                            break
     if leadcontainer:
         # if we have a container, check if it's part of a Kubernetes pod and return an array of those containers
         if 'io.kubernetes.pod.uid' in leadcontainer['Config']['Labels']:
