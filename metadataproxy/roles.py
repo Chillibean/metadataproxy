@@ -124,6 +124,8 @@ def find_container(ip):
                 del CONTAINER_MAPPING[ip]
     
     _fqdn = None
+    with PrintingBlockTimer('Container fetch'):
+        _ids = [c['Id'] for c in client.containers()]
     if not leadcontainer:
         with PrintingBlockTimer('Reverse DNS'):
             if app.config['ROLE_REVERSE_LOOKUP']:
@@ -132,10 +134,6 @@ def find_container(ip):
                 except socket.error as e:
                     log.error('gethostbyaddr failed: {0}'.format(e.args))
                     pass
-
-        with PrintingBlockTimer('Container fetch'):
-            _ids = [c['Id'] for c in client.containers()]
-
         for _id in _ids:
             c = get_container(_id)
             if c:
