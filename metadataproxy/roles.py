@@ -117,7 +117,7 @@ def find_container(ip):
     if ip in CONTAINER_MAPPING:
         log.info('Container ids for IP {0} in cache'.format(ip))
         with PrintingBlockTimer('Container inspect'):
-            container = get_container(client.inspect_container(CONTAINER_MAPPING[ip],True))
+            container = get_container(CONTAINER_MAPPING[ip],True)
             if container:
                 leadcontainer = container
             else:
