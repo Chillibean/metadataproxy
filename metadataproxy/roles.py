@@ -231,7 +231,8 @@ def check_role_name_from_ip(ip, requested_role):
 def get_role_name_from_ip(ip, stripped=True):
     if app.config['ROLE_MAPPING_FILE']:
         return ROLE_MAPPINGS.get(ip, app.config['DEFAULT_ROLE'])
-    containers = find_container(ip)
+    with PrintingBlockTimer('Find Containers'):
+        containers = find_container(ip)
     if containers:
         for container in containers:
             env = container['Config']['Env']
