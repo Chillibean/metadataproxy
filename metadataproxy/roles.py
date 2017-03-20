@@ -18,6 +18,7 @@ from metadataproxy import log
 
 ROLES = {}
 CONTAINER_MAPPING = {}
+CONTAINER_CACHE = {}
 K8S_MAPPING = {}
 _docker_client = None
 _iam_client = None
@@ -83,29 +84,40 @@ def sts_client():
     return _sts_client
 
 
+def get_container(id,nocache=False):
+
+    client = docker_client()
+
+    if not nocache and id in CONTAINER_CACHE:
+        return CONTAINER_CACHE[id]
+    else:
+        try:
+            container = client.inspect_container(id)
+            if container['State']['Running']:
+                CONTAINER_CACHE[id]=container
+                # create a cache of containers for reducing further lookups
+                if 'io.kubernetes.pod.uid' in c['Config']['Labels']:
+                    K8S_MAPPING[id]=container
+                return container
+            else:
+                if id in CONTAINER_CACHE:
+                    del CONAINER_CACHE[id]
+                return None
+        except docker.errors.NotFound:
+            return None
+
 @log_exec_time
 def find_container(ip):
     pattern = re.compile(app.config['HOSTNAME_MATCH_REGEX'])
-    client = docker_client()
     # Try looking at the container mapping cache first
     log.info('size of container cache: {0}'.format(len(CONTAINER_MAPPING)))
     if ip in CONTAINER_MAPPING:
         log.info('Container ids for IP {0} in cache'.format(ip))
-        
-        try:
-            with PrintingBlockTimer('Container inspect'):
-                container = client.inspect_container(CONTAINER_MAPPING[ip])
-            # Only return a cached container if it is running.
-            if container['State']['Running']:
+        with PrintingBlockTimer('Container inspect'):
+            container = get_container(client.inspect_container(CONTAINER_MAPPING[ip],True))
+            if container:
                 leadcontainer = container
-            else:
-                log.error('Container id {0} is no longer running'.format(ip))
-                del CONTAINER_MAPPING[ip]
-        except docker.errors.NotFound:
-            msg = 'Container id {0} no longer mapped to {1}'
-            log.error(msg.format(CONTAINER_MAPPING[ip], ip))
-            del CONTAINER_MAPPING[ip]
-
+                break
     _fqdn = None
     with PrintingBlockTimer('Reverse DNS'):
         if app.config['ROLE_REVERSE_LOOKUP']:
@@ -119,48 +131,41 @@ def find_container(ip):
         _ids = [c['Id'] for c in client.containers()]
 
     for _id in _ids:
-        try:
-            with PrintingBlockTimer('Container inspect'):
-                c = client.inspect_container(_id)
-        except docker.errors.NotFound:
-            log.error('Container id {0} not found'.format(_id))
-            continue
-        # create a cache of containers for reducing further lookups
-        if 'io.kubernetes.pod.uid' in c['Config']['Labels']:
-            K8S_MAPPING[_id]=c
-        # Try matching container to caller by IP address
-        _ip = c['NetworkSettings']['IPAddress']
-        if ip == _ip:
-            msg = 'Lead Container id {0} mapped to {1} by IP match'
-            log.debug(msg.format(_id, ip))
-            CONTAINER_MAPPING[ip] = _id
-            leadcontainer = c
-            break
-        # Try matching container to caller by sub network IP address
-        _networks = c['NetworkSettings']['Networks']
-        if _networks:
-            for _network in _networks:
-                if _networks[_network]['IPAddress'] == ip:
-                    msg = 'Container id {0} mapped to {1} by sub-network IP match'
-                    log.debug(msg.format(_id, ip))
-                    CONTAINER_MAPPING[ip] = _id
-                    leadcontainer = c
-                    break
-        # Try matching container to caller by hostname match
-        if app.config['ROLE_REVERSE_LOOKUP']:
-            hostname = c['Config']['Hostname']
-            domain = c['Config']['Domainname']
-            fqdn = '{0}.{1}'.format(hostname, domain)
-            # Default pattern matches _fqdn == fqdn
-            _groups = re.match(pattern, _fqdn).groups()
-            groups = re.match(pattern, fqdn).groups()
-            if _groups and groups:
-                if groups[0] == _groups[0]:
-                    msg = 'Container id {0} mapped to {1} by FQDN match'
-                    log.debug(msg.format(_id, ip))
-                    CONTAINER_MAPPING[ip] = _id
-                    leadcontainer = c
-                    break
+        c = get_container(_id)
+        if c:
+            # Try matching container to caller by IP address
+            _ip = c['NetworkSettings']['IPAddress']
+            if ip == _ip:
+                msg = 'Lead Container id {0} mapped to {1} by IP match'
+                log.debug(msg.format(_id, ip))
+                CONTAINER_MAPPING[ip] = _id
+                leadcontainer = c
+                break
+            # Try matching container to caller by sub network IP address
+            _networks = c['NetworkSettings']['Networks']
+            if _networks:
+                for _network in _networks:
+                    if _networks[_network]['IPAddress'] == ip:
+                        msg = 'Container id {0} mapped to {1} by sub-network IP match'
+                        log.debug(msg.format(_id, ip))
+                        CONTAINER_MAPPING[ip] = _id
+                        leadcontainer = c
+                        break
+            # Try matching container to caller by hostname match
+            if app.config['ROLE_REVERSE_LOOKUP']:
+                hostname = c['Config']['Hostname']
+                domain = c['Config']['Domainname']
+                fqdn = '{0}.{1}'.format(hostname, domain)
+                # Default pattern matches _fqdn == fqdn
+                _groups = re.match(pattern, _fqdn).groups()
+                groups = re.match(pattern, fqdn).groups()
+                if _groups and groups:
+                    if groups[0] == _groups[0]:
+                        msg = 'Container id {0} mapped to {1} by FQDN match'
+                        log.debug(msg.format(_id, ip))
+                        CONTAINER_MAPPING[ip] = _id
+                        leadcontainer = c
+                        break
     if leadcontainer:
         # if we have a container, check if it's part of a Kubernetes pod and return an array of those containers
         if 'io.kubernetes.pod.uid' in leadcontainer['Config']['Labels']:
@@ -173,40 +178,32 @@ def find_container(ip):
                 # check cache first, to save docker api calls
                 if _id in K8S_MAPPING:
                     if K8S_MAPPING[_id]['Config']['Labels']['io.kubernetes.pod.uid'] == leadcontainer['Config']['Labels']['io.kubernetes.pod.uid']:
-                        try:
-                            with PrintingBlockTimer('Container inspect'):
-                                container = client.inspect_container(K8S_MAPPING[_id]['Id'])
-                                # Only return a cached container if it is running.
-                                if container['State']['Running']:
-                                    msg = 'Lead Container id {0} mapped to {1} by k8s cached pod match to container {2}'
-                                    log.debug(msg.format(_id, ip, leadcontainer['Id']))
-                                    k.append(container)
-                                    continue
-                                else:
-                                    log.error('Container id {0} is no longer running'.format(_id))
-                                    del K8S_MAPPING[_id]
-                        except docker.errors.NotFound:
-                            msg = 'Container id {0} no longer found'
-                            log.error(msg.format(_id))
+                        container = get_container(K8S_MAPPING[_id]['Id'],True)
+                        # Only return a cached container if it is running.
+                        if container:
+                            if container['State']['Running']:
+                                msg = 'Lead Container id {0} mapped to {1} by k8s cached pod match to container {2}'
+                                log.debug(msg.format(_id, ip, leadcontainer['Id']))
+                                k.append(container)
+                                continue
+                            else:
+                                log.error('Container id {0} is no longer running'.format(_id))
+                                del K8S_MAPPING[_id]
+                        else:
+                            log.error('Container id {0} is no longer found'.format(_id))
                             del K8S_MAPPING[_id]
                 else:
-                    try:
-                        with PrintingBlockTimer('Container inspect'):
-                            c = client.inspect_container(_id)
-                            if 'io.kubernetes.pod.uid' in c['Config']['Labels']:
-                                K8S_MAPPING[_id]=c
-                                if c['Config']['Labels']['io.kubernetes.pod.uid'] == leadcontainer['Config']['Labels']['io.kubernetes.pod.uid']:
-                                    msg = 'Lead Container id {0} mapped to {1} by k8s pod match to container {2}'
-                                    log.debug(msg.format(_id, ip, leadcontainer['Id']))
-                                    k.append(c)
-                    except docker.errors.NotFound:
+                    container = get_container(_id)
+                    if container:
+                        if 'io.kubernetes.pod.uid' in container['Config']['Labels']:
+                            K8S_MAPPING[_id]=container
+                            if container['Config']['Labels']['io.kubernetes.pod.uid'] == leadcontainer['Config']['Labels']['io.kubernetes.pod.uid']:
+                                msg = 'Lead Container id {0} mapped to {1} by k8s pod match to container {2}'
+                                log.debug(msg.format(_id, ip, leadcontainer['Id']))
+                                k.append(container)
+                    else:
                         log.error('Container id {0} not found'.format(_id))
                         continue
-                    if 'io.kubernetes.pod.uid' in c['Config']['Labels'] and c['Config']['Labels']['io.kubernetes.pod.uid'] == leadcontainer['Config']['Labels']['io.kubernetes.pod.uid']:
-                        msg = 'Lead Container id {0} mapped to {1} by k8s pod match to container {2}'
-                        log.debug(msg.format(_id, ip, leadcontainer['Id']))
-                        k.append(c)
-
             return k
         else:
             # not kubernetes, just return an single element array.
