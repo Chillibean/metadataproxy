@@ -101,7 +101,7 @@ def get_container(id,nocache=False):
                 return container
             else:
                 if id in CONTAINER_CACHE:
-                    del CONAINER_CACHE[id]
+                    del CONTAINER_CACHE[id]
                 return None
         except docker.errors.NotFound:
             return None
