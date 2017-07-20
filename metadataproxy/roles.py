@@ -236,7 +236,7 @@ def get_role_name_from_ip(ip, stripped=True):
     if containers:
         for container in containers:
             env = container['Config']['Env']
-            if e:
+            if env:
                 for e in env:
                     key, val = e.split('=', 1)
                     if key == 'IAM_ROLE':
