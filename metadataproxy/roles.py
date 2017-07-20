@@ -238,6 +238,8 @@ def get_role_name_from_ip(ip, stripped=True):
             env = container['Config']['Env']
             if env:
                 for e in env:
+                    msg = "Env var: {0} for container {1}"
+                    log.debug(msg.format(e,container['Id']))
                     key, val = e.split('=', 1)
                     if key == 'IAM_ROLE':
                         if val.startswith('arn:aws'):
