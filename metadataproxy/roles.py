@@ -236,16 +236,17 @@ def get_role_name_from_ip(ip, stripped=True):
     if containers:
         for container in containers:
             env = container['Config']['Env']
-            for e in env:
-                key, val = e.split('=', 1)
-                if key == 'IAM_ROLE':
-                    if val.startswith('arn:aws'):
-                        m = RE_IAM_ARN.match(val)
-                        val = '{0}@{1}'.format(m.group(2), m.group(1))
-                    if stripped:
-                        return val.split('@')[0]
-                    else:
-                        return val
+            if e:
+                for e in env:
+                    key, val = e.split('=', 1)
+                    if key == 'IAM_ROLE':
+                        if val.startswith('arn:aws'):
+                            m = RE_IAM_ARN.match(val)
+                            val = '{0}@{1}'.format(m.group(2), m.group(1))
+                            if stripped:
+                                return val.split('@')[0]
+                            else:
+                                return val
         msg = "Couldn't find IAM_ROLE variable. Returning DEFAULT_ROLE: {0}"
         log.debug(msg.format(app.config['DEFAULT_ROLE']))
         if stripped:
